@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Quick Ride</title>
+  <link rel="manifest" href="/manifest.json" />
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <!-- Leaflet Routing Machine CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@latest/dist/leaflet-routing-machine.css" />
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: sans-serif; }
+    body { display: flex; flex-direction: column; height: 100vh; background: #0f172a; color: #fff; }
+    #map { height: 55vh; width: 100%; }
+    .panel { padding: 16px; background: #1e293b; flex: 1; overflow-y: auto; border-top-left-radius: 16px; border-top-right-radius: 16px; }
+    .btn { padding: 12px; border-radius: 8px; border: none; font-weight: bold; cursor: pointer; color: #fff; width: 100%; font-size: 1rem; }
+    .btn-green { background: #10b981; }
+    .vehicle-select { display: flex; gap: 10px; margin: 12px 0; }
+    .v-card { flex: 1; padding: 10px; background: #334155; border-radius: 8px; text-align: center; cursor: pointer; border: 2px solid transparent; }
+    .v-card.selected { border-color: #38bdf8; background: #1e293b; }
+    .status-card { background: #334155; padding: 12px; border-radius: 8px; margin-top: 10px; display: none; text-align: center; }
+    /* Hide routing instruction box on mobile map */
+    .leaflet-routing-container { display: none !important; }
+  </style>
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js');
+    }
+  </script>
+</head>
+<body>
+  <div id="map"></div>
+
+  <div class="panel">
+    <div id="booking-section">
+      <h3 style="margin-bottom: 8px;">Book Your Ride</h3>
+      <p style="color: #94a3b8; font-size: 0.85rem;" id="step-instruction">Tap on the map to set <b>Pickup</b> location</p>
+
+      <div class="vehicle-select">
+        <div class="v-card selected" onclick="selectVehicle('bike', this)">
+          <div>🏍️</div>
+          <small>Bike</small>
+        </div>
+        <div class="v-card" onclick="selectVehicle('auto', this)">
+          <div>🛺</div>
+          <small>Auto</small>
+        </div>
+        <div class="v-card" onclick="selectVehicle('cab', this)">
+          <div>🚗</div>
+          <small>Cab</small>
+        </div>
+      </div>
+
+      <div style="display: flex; justify-content: space-between; margin: 10px 0;">
+        <span style="color: #94a3b8;">Trip Distance & Fare:</span>
+        <strong id="fare-display" style="color: #10b981;">₹0 (0 km)</strong>
+      </div>
+
+      <button class="btn btn-green" id="btn-book" onclick="requestRide()" disabled>Set Pickup & Drop on Map</button>
+    </div>
+
+    <!-- Active Ride Status -->
+    <div class="status-card" id="status-card">
+      <h3 id="ride-status-text" style="color: #f59e0b;">Finding Driver...</h3>
+      <div id="otp-container" style="display: none; margin: 12px 0;">
+        <small style="color: #94a3b8;">Share this OTP with Driver</small>
+        <h1 id="otp-display" style="color: #38bdf8; letter-spacing: 4px; font-size: 2.2rem;">----</h1>
+      </div>
+    </div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <!-- Leaflet Routing Machine JS -->
+  <script src="https://unpkg.com/leaflet-routing-machine@latest/dist/leaflet-routing-machine.js"></script>
+  <script>
+    const socket = io();
+
+    const map = L.map('map').setView([28.6139, 77.2090], 13);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+
+    let pickupLatLng = null;
+    let dropLatLng = null;
+    let routingControl = null;
+    let selectedVehicle = 'bike';
+    let calculatedFare = 0;
+    let tripDistance = 0;
+
+    // Moving Car Marker
+    let liveDriverMarker = null;
+    const movingCarIcon = L.icon({
+      iconUrl: 'https://cdn-icons-png.flaticon.com/512/3202/3202926.png',
+      iconSize: [38, 38],
+      iconAnchor: [19, 19]
+    });
+
+    socket.on('driver-location-updated', (data) => {
+      if (!liveDriverMarker) {
+        liveDriverMarker = L.marker([data.lat, data.lng], { icon: movingCarIcon }).addTo(map);
+      } else {
+        liveDriverMarker.setLatLng([data.lat, data.lng]);
+      }
+    });
+
+    function selectVehicle(type, elem) {
+      selectedVehicle = type;
+      document.querySelectorAll('.v-card').forEach(el => el.classList.remove('selected'));
+      elem.classList.add('selected');
+      updateFare();
+    }
+
+    // Map Tap Selection (Pickup & Drop)
+    map.on('click', (e) => {
+      if (!pickupLatLng) {
+        pickupLatLng = e.latlng;
+        L.marker(pickupLatLng).addTo(map).bindPopup('Pickup Location').openPopup();
+        document.getElementById('step-instruction').innerHTML = 'Now tap on map to set <b>Drop</b> location';
+      } else if (!dropLatLng) {
+        dropLatLng = e.latlng;
+        L.marker(dropLatLng).addTo(map).bindPopup('Drop Location').openPopup();
+        document.getElementById('step-instruction').innerText = 'Calculating road route...';
+
+        // Draw Actual Road Route using Leaflet Routing Machine
+        routingControl = L.Routing.control({
+          waypoints: [
+            L.latLng(pickupLatLng.lat, pickupLatLng.lng),
+            L.latLng(dropLatLng.lat, dropLatLng.lng)
+          ],
+          routeWhileDragging: false,
+          show: false,
+          addWaypoints: false,
+          lineOptions: {
+            styles: [{ color: '#38bdf8', opacity: 0.8, weight: 6 }]
+          }
+        }).addTo(map);
+
+        // Jab road route calculate ho jaye:
+        routingControl.on('routesfound', (event) => {
+          const routes = event.routes;
+          const summary = routes[0].summary;
+          // Road distance in KM
+          tripDistance = (summary.totalDistance / 1000).toFixed(1);
+          updateFare();
+
+          const btn = document.getElementById('btn-book');
+          btn.disabled = false;
+          btn.innerText = `Book ${selectedVehicle.toUpperCase()} (₹${calculatedFare})`;
+          document.getElementById('step-instruction').innerText = `Road Route Found: ${tripDistance} km (~${Math.round(summary.totalTime / 60)} mins)`;
+        });
+      }
+    });
+
+    function updateFare() {
+      if (!tripDistance) return;
+      const rates = { bike: 8, auto: 12, cab: 18 };
+      calculatedFare = Math.round(Math.max(30, tripDistance * (rates[selectedVehicle] || 10)));
+      document.getElementById('fare-display').innerText = `₹${calculatedFare} (${tripDistance} km)`;
+
+      const btn = document.getElementById('btn-book');
+      if (!btn.disabled) {
+        btn.innerText = `Book ${selectedVehicle.toUpperCase()} (₹${calculatedFare})`;
+      }
+    }
+
+    function requestRide() {
+      socket.emit('request-ride', {
+        fare: calculatedFare,
+        distance: tripDistance,
+        vehicleType: selectedVehicle,
+        pickup: pickupLatLng,
+        drop: dropLatLng
+      });
+
+      document.getElementById('booking-section').style.display = 'none';
+      document.getElementById('status-card').style.display = 'block';
+    }
+
+    socket.on('ride-created', (data) => {
+      document.getElementById('otp-display').innerText = data.otp;
+      document.getElementById('otp-container').style.display = 'block';
+    });
+
+    socket.on('driver-assigned', () => {
+      document.getElementById('ride-status-text').innerText = '🚗 Driver is on the way!';
+      document.getElementById('ride-status-text').style.color = '#10b981';
+    });
+
+    socket.on('trip-started', () => {
+      document.getElementById('ride-status-text').innerText = 'Trip Started! Enjoy your ride';
+    });
+
+    socket.on('ride-finished-rider', (data) => {
+      alert(`You reached your destination! Fare: ₹${data.fare}`);
+      location.reload();
+    });
+  </script>
+</body>
+</html>

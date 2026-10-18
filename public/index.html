@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Nandi Ride - Reliable Rides</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@latest/dist/leaflet-routing-machine.css" />
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { background: #090d16; color: #fff; min-height: 100vh; display: flex; flex-direction: column; }
+
+    /* Top Brand Bar */
+    header { background: #111827; padding: 14px 20px; border-bottom: 1px solid #1f2937; display: flex; justify-content: space-between; align-items: center; }
+    .brand-title { font-size: 1.4rem; font-weight: 900; letter-spacing: 1px; color: #38bdf8; display: flex; align-items: center; gap: 8px; }
+    .brand-title span { color: #f59e0b; }
+    .user-tag { font-size: 0.85rem; color: #9ca3af; background: #1f2937; padding: 4px 10px; border-radius: 20px; }
+
+    /* Main Entry Screen (2 Popups / Cards) */
+    #portal-view { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px; text-align: center; }
+    .portal-heading { margin-bottom: 24px; }
+    .portal-heading h1 { font-size: 2rem; margin-bottom: 6px; }
+    .portal-heading p { color: #9ca3af; font-size: 0.95rem; }
+
+    .role-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 20px; width: 100%; max-width: 620px; }
+    .role-card { background: #162032; border: 2px solid #23354d; border-radius: 16px; padding: 30px 20px; cursor: pointer; transition: all 0.25s ease; text-align: center; }
+    .role-card:hover { transform: translateY(-4px); border-color: #38bdf8; box-shadow: 0 10px 25px rgba(56,189,248,0.2); }
+    .role-icon { font-size: 3rem; margin-bottom: 12px; }
+    .role-card h2 { font-size: 1.3rem; margin-bottom: 6px; color: #f3f4f6; }
+    .role-card p { color: #9ca3af; font-size: 0.85rem; }
+
+    /* Modal Popup (Login & Sign Up) */
+    .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.75); backdrop-filter: blur(4px); display: none; align-items: center; justify-content: center; z-index: 9999; padding: 16px; }
+    .modal-box { background: #162032; border: 1px solid #334155; border-radius: 16px; width: 100%; max-width: 380px; padding: 24px; position: relative; }
+    .close-btn { position: absolute; top: 14px; right: 16px; font-size: 1.4rem; cursor: pointer; color: #9ca3af; }
+    .auth-tabs { display: flex; gap: 8px; margin: 16px 0; background: #0f172a; padding: 4px; border-radius: 8px; }
+    .auth-tab { flex: 1; text-align: center; padding: 8px; font-size: 0.9rem; font-weight: bold; cursor: pointer; border-radius: 6px; color: #9ca3af; }
+    .auth-tab.active { background: #38bdf8; color: #000; }
+    .auth-input { width: 100%; padding: 11px 14px; margin-bottom: 12px; border-radius: 8px; border: 1px solid #334155; background: #090d16; color: #fff; font-size: 0.95rem; }
+    .btn-auth { width: 100%; padding: 12px; border-radius: 8px; border: none; background: #10b981; color: #fff; font-weight: bold; font-size: 1rem; cursor: pointer; margin-top: 6px; }
+
+    /* Dashboards (Hidden Initially) */
+    .dashboard-view { display: none; flex: 1; flex-direction: column; }
+    .map-container { height: 50vh; width: 100%; background: #111; }
+    .panel-container { padding: 16px; background: #162032; flex: 1; overflow-y: auto; }
+    .btn { padding: 12px; border-radius: 8px; border: none; font-weight: bold; cursor: pointer; color: #fff; width: 100%; font-size: 1rem; }
+    .btn-green { background: #10b981; }
+    .btn-blue { background: #3b82f6; }
+    .badge { padding: 4px 10px; border-radius: 20px; font-weight: bold; font-size: 0.8rem; background: #ef4444; }
+    .badge.online { background: #10b981; }
+    .card { background: #0f172a; border: 1px solid #23354d; border-radius: 10px; padding: 14px; margin-top: 10px; }
+    .vehicle-select { display: flex; gap: 10px; margin: 12px 0; }
+    .v-card { flex: 1; padding: 10px; background: #0f172a; border-radius: 8px; text-align: center; cursor: pointer; border: 2px solid transparent; }
+    .v-card.selected { border-color: #38bdf8; }
+    .leaflet-routing-container { display: none !important; }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div class="brand-title">🛺 NANDI <span>RIDE</span></div>
+    <div class="user-tag" id="header-user-tag">Portal Ready</div>
+  </header>
+
+  <!-- ENTRY SCREEN: 2 BIG POPUP CARDS -->
+  <div id="portal-view">
+    <div class="portal-heading">
+      <h1>Kisme Login Karna Chahte Hain?</h1>
+      <p>Nandi Ride portal par apna role chunein</p>
+    </div>
+
+    <div class="role-grid">
+      <!-- 1. CAPTAIN CARD -->
+      <div class="role-card" onclick="openAuthModal('driver')">
+        <div class="role-icon">👨‍✈️</div>
+        <h2>1. CAPTAIN</h2>
+        <p>Driver / Partner Portal (Earn & Accept Rides)</p>
+      </div>
+
+      <!-- 2. RIDER CARD -->
+      <div class="role-card" onclick="openAuthModal('rider')">
+        <div class="role-icon">📱</div>
+        <h2>2. RIDER</h2>
+        <p>Customer Portal (Book Cabs, Autos & Bikes)</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- AUTH POPUP MODAL (LOGIN & SIGN UP) -->
+  <div class="modal-overlay" id="auth-modal">
+    <div class="modal-box">
+      <span class="close-btn" onclick="closeAuthModal()">&times;</span>
+      <h2 id="modal-role-title">Login - Rider</h2>
+      <p style="color:#9ca3af; font-size:0.85rem; margin-top:2px;">Nandi Ride Secure Auth</p>
+
+      <div class="auth-tabs">
+        <div class="auth-tab active" id="tab-login" onclick="setAuthMode('login')">LOGIN</div>
+        <div class="auth-tab" id="tab-signup" onclick="setAuthMode('signup')">SIGN UP</div>
+      </div>
+
+      <div id="signup-name-box" style="display: none;">
+        <input type="text" id="auth-name" class="auth-input" placeholder="Aapka Poora Naam" />
+      </div>
+      <input type="tel" id="auth-phone" class="auth-input" placeholder="Mobile Number (10 Digits)" maxlength="10" />
+      <input type="password" id="auth-password" class="auth-input" placeholder="Password" />
+
+      <button class="btn-auth" id="btn-auth-submit" onclick="submitAuth()">Login Karein</button>
+    </div>
+  </div>
+
+  <!-- CAPTAIN DASHBOARD -->
+  <div id="captain-view" class="dashboard-view">
+    <div id="captain-map" class="map-container"></div>
+    <div class="panel-container">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+        <div>
+          <h3 id="captain-name-display">Captain Console</h3>
+          <span class="badge" id="captain-badge">OFFLINE</span>
+        </div>
+        <button class="btn btn-blue" id="btn-driver-status" style="width: auto;" onclick="toggleCaptainOnline()">Go Online</button>
+      </div>
+
+      <div style="background:#090d16; padding:10px; border-radius:8px; margin-bottom:12px; display:flex; justify-content:space-between;">
+        <span style="color:#9ca3af;">Today Earnings:</span>
+        <strong id="captain-earnings" style="color:#10b981;">₹0</strong>
+      </div>
+
+      <!-- Incoming Offer Card -->
+      <div class="card" id="driver-offer-card" style="display:none; border-color:#f59e0b;">
+        <h4 style="color:#f59e0b;">🔔 NAYI RIDE OFFER AAYI HAI!</h4>
+        <h2 id="offer-fare" style="color:#10b981; margin:6px 0;">₹0</h2>
+        <p id="offer-dist" style="color:#9ca3af;">Distance: 0 km</p>
+        <button class="btn btn-green" style="margin-top:10px;" onclick="acceptDriverRide()">Accept Ride</button>
+      </div>
+
+      <!-- Active Ride Card -->
+      <div class="card" id="driver-active-card" style="display:none;">
+        <h4>Current Active Ride</h4>
+        <div id="driver-otp-box">
+          <input type="text" id="driver-otp-input" placeholder="Enter Rider 4-digit OTP" style="width:100%; padding:10px; margin:10px 0; border-radius:6px; border:none; text-align:center; font-size:1.2rem; background:#090d16; color:#fff;" maxlength="4" />
+          <button class="btn btn-green" onclick="verifyCaptainOtp()">Start Ride</button>
+        </div>
+        <button class="btn btn-green" id="btn-finish-ride" style="display:none; background:#f59e0b; color:#000;" onclick="finishCaptainRide()">Complete Trip</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- RIDER DASHBOARD -->
+  <div id="rider-view" class="dashboard-view">
+    <div id="rider-map" class="map-container"></div>
+    <div class="panel-container">
+      <div id="rider-booking-box">
+        <h3>Book Your Nandi Ride</h3>
+        <p style="color:#9ca3af; font-size:0.85rem;" id="rider-step-info">Map par tap karke <b>Pickup</b> select karein</p>
+
+        <div class="vehicle-select">
+          <div class="v-card selected" onclick="selectRiderVehicle('bike', this)">
+            <div style="font-size:1.5rem;">🏍️</div>
+            <small>Bike</small>
+          </div>
+          <div class="v-card" onclick="selectRiderVehicle('auto', this)">
+            <div style="font-size:1.5rem;">🛺</div>
+            <small>Auto</small>
+          </div>
+          <div class="v-card" onclick="selectRiderVehicle('cab', this)">
+            <div style="font-size:1.5rem;">🚗</div>
+            <small>Cab</small>
+          </div>
+        </div>
+
+        <div style="display:flex; justify-content:space-between; margin:10px 0;">
+          <span style="color:#9ca3af;">Fare & Distance:</span>
+          <strong id="rider-fare-display" style="color:#10b981;">₹0 (0 km)</strong>
+        </div>
+
+        <button class="btn btn-green" id="btn-rider-book" onclick="requestRiderRide()" disabled>Set Pickup & Drop</button>
+      </div>
+
+      <div class="card" id="rider-status-card" style="display:none; text-align:center;">
+        <h3 id="rider-status-text" style="color:#f59e0b;">Finding Captain...</h3>
+        <div id="rider-otp-box" style="display:none; margin:10px 0;">
+          <small style="color:#9ca3af;">Driver ko yeh OTP batayein</small>
+          <h1 id="rider-otp-num" style="color:#38bdf8; font-size:2.2rem; letter-spacing:4px;">----</h1>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet-routing-machine@latest/dist/leaflet-routing-machine.js"></script>
+
+  <script>
+    const socket = io();
+    let currentAuthRole = 'rider';
+    let currentAuthMode = 'login';
+    let currentUser = null;
+
+    // Open/Close Modal
+    function openAuthModal(role) {
+      currentAuthRole = role;
+      document.getElementById('modal-role-title').innerText = `${currentAuthMode.toUpperCase()} - ${role.toUpperCase()}`;
+      document.getElementById('auth-modal').style.display = 'flex';
+    }
+
+    function closeAuthModal() {
+      document.getElementById('auth-modal').style.display = 'none';
+    }
+
+    function setAuthMode(mode) {
+      currentAuthMode = mode;
+      document.getElementById('tab-login').classList.toggle('active', mode === 'login');
+      document.getElementById('tab-signup').classList.toggle('active', mode === 'signup');
+      document.getElementById('signup-name-box').style.display = mode === 'signup' ? 'block' : 'none';
+      document.getElementById('btn-auth-submit').innerText = mode === 'signup' ? 'Sign Up Karein' : 'Login Karein';
+      document.getElementById('modal-role-title').innerText = `${mode.toUpperCase()} - ${currentAuthRole.toUpperCase()}`;
+    }
+
+    // Submit Auth (Login / Signup)
+    async function submitAuth() {
+      const phone = document.getElementById('auth-phone').value.trim();
+      const password = document.getElementById('auth-password').value.trim();
+      const name = document.getElementById('auth-name').value.trim();
+
+      if (!phone || !password || (currentAuthMode === 'signup' && !name)) {
+        alert('Kripya saari details bharein.');
+        return;
+      }
+
+      const endpoint = currentAuthMode === 'signup' ? '/api/auth/signup' : '/api/auth/login';
+      const body = { role: currentAuthRole, phone, password, ...(currentAuthMode === 'signup' && { name }) };
+
+      try {
+        const res = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        const data = await res.json();
+
+        if (!res.ok) {
+          alert(data.error || 'Auth failed');
+          return;
+        }
+
+        currentUser = data.user;
+        closeAuthModal();
+        launchDashboard(currentAuthRole);
+      } catch (e) {
+        alert('Server se connect nahi ho paya.');
+      }
+    }
+
+    // Launch Respective Dashboard
+    function launchDashboard(role) {
+      document.getElementById('portal-view').style.display = 'none';
+      document.getElementById('header-user-tag').innerText = `${role.toUpperCase()}: ${currentUser.name || currentUser.phone}`;
+
+      if (role === 'driver') {
+        document.getElementById('captain-view').style.display = 'flex';
+        initCaptainMap();
+      } else {
+        document.getElementById('rider-view').style.display = 'flex';
+        initRiderMap();
+      }
+    }
+
+    // ================= CAPTAIN LOGIC =================
+    let cMap, cMarker, cTimer, cLat = 28.6139, cLng = 77.2090;
+    let isCaptainOnline = false;
+    let activeRideId = null;
+
+    function initCaptainMap() {
+      if (cMap) return;
+      cMap = L.map('captain-map').setView([cLat, cLng], 14);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(cMap);
+      cMarker = L.marker([cLat, cLng]).addTo(cMap).bindPopup('Captain Location');
+      loadEarnings();
+    }
+
+    function toggleCaptainOnline() {
+      isCaptainOnline = !isCaptainOnline;
+      const badge = document.getElementById('captain-badge');
+      const btn = document.getElementById('btn-driver-status');
+
+      if (isCaptainOnline) {
+        badge.innerText = 'ONLINE';
+        badge.classList.add('online');
+        btn.innerText = 'Go Offline';
+        btn.style.background = '#ef4444';
+        socket.emit('driver-online', { lat: cLat, lng: cLng });
+
+        cTimer = setInterval(() => {
+          cLat += 0.0002;
+          cLng += 0.0002;
+          cMarker.setLatLng([cLat, cLng]);
+          cMap.panTo([cLat, cLng]);
+          socket.emit('update-driver-location', { lat: cLat, lng: cLng });
+        }, 2000);
+      } else {
+        badge.innerText = 'OFFLINE';
+        badge.classList.remove('online');
+        btn.innerText = 'Go Online';
+        btn.style.background = '#3b82f6';
+        if (cTimer) clearInterval(cTimer);
+      }
+    }
+
+    socket.on('new-ride-offer', (data) => {
+      activeRideId = data.rideId;
+      document.getElementById('offer-fare').innerText = '₹' + data.fare;
+      document.getElementById('offer-dist').innerText = `Distance: ${data.distance} km (${data.vehicleType.toUpperCase()})`;
+      document.getElementById('driver-offer-card').style.display = 'block';
+    });
+
+    function acceptDriverRide() {
+      socket.emit('accept-ride', { rideId: activeRideId, driverPhone: currentUser.phone });
+      document.getElementById('driver-offer-card').style.display = 'none';
+      document.getElementById('driver-active-card').style.display = 'block';
+    }
+
+    function verifyCaptainOtp() {
+      const enteredOtp = document.getElementById('driver-otp-input').value;
+      socket.emit('verify-otp', { rideId: activeRideId, enteredOtp });
+    }
+
+    socket.on('otp-result', (res) => {
+      if (res.success) {
+        alert('OTP Matched! Nandi Ride Started.');
+        document.getElementById('driver-otp-box').style.display = 'none';
+        document.getElementById('btn-finish-ride').style.display = 'block';
+      } else {
+        alert('Galat OTP!');
+      }
+    });
+
+    function finishCaptainRide() {
+      socket.emit('complete-ride', { rideId: activeRideId });
+    }
+
+    socket.on('ride-finished-driver', (data) => {
+      alert(`Ride Completed! Fare Earned: ₹${data.fare}`);
+      document.getElementById('driver-active-card').style.display = 'none';
+      document.getElementById('driver-otp-box').style.display = 'block';
+      document.getElementById('btn-finish-ride').style.display = 'none';
+      document.getElementById('driver-otp-input').value = '';
+      loadEarnings();
+    });
+
+    function loadEarnings() {
+      fetch('/api/history').then(r => r.json()).then(rows => {
+        let total = 0;
+        rows.forEach(r => total += Number(r.fare || 0));
+        document.getElementById('captain-earnings').innerText = '₹' + total;
+      }).catch(()=>{});
+    }
+
+    // ================= RIDER LOGIC =================
+    let rMap, rPickup, rDrop, rRoute, rDist = 0, rFare = 0, rType = 'bike';
+    let rCarMarker = null;
+
+    const carIcon = L.icon({
+      iconUrl: 'https://cdn-icons-png.flaticon.com/512/3202/3202926.png',
+      iconSize: [36, 36],
+      iconAnchor: [18, 18]
+    });
+
+    function initRiderMap() {
+      if (rMap) return;
+      rMap = L.map('rider-map').setView([28.6139, 77.2090], 13);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(rMap);
+
+      rMap.on('click', (e) => {
+        if (!rPickup) {
+          rPickup = e.latlng;
+          L.marker(rPickup).addTo(rMap).bindPopup('Pickup Point').openPopup();
+          document.getElementById('rider-step-info').innerHTML = 'Ab map par tap karke <b>Drop</b> location set karein';
+        } else if (!rDrop) {
+          rDrop = e.latlng;
+          L.marker(rDrop).addTo(rMap).bindPopup('Drop Point').openPopup();
+          document.getElementById('rider-step-info').innerText = 'Road route calculate ho raha hai...';
+
+          rRoute = L.Routing.control({
+            waypoints: [L.latLng(rPickup.lat, rPickup.lng), L.latLng(rDrop.lat, rDrop.lng)],
+            show: false,
+            addWaypoints: false,
+            lineOptions: { styles: [{ color: '#38bdf8', weight: 6 }] }
+          }).addTo(rMap);
+
+          rRoute.on('routesfound', (ev) => {
+            const sum = ev.routes[0].summary;
+            rDist = (sum.totalDistance / 1000).toFixed(1);
+            calcRiderFare();
+            document.getElementById('btn-rider-book').disabled = false;
+            document.getElementById('btn-rider-book').innerText = `Book ${rType.toUpperCase()} (₹${rFare})`;
+            document.getElementById('rider-step-info').innerText = `Road Distance: ${rDist} km`;
+          });
+        }
+      });
+    }
+
+    socket.on('driver-location-updated', (data) => {
+      if (!rMap) return;
+      if (!rCarMarker) {
+        rCarMarker = L.marker([data.lat, data.lng], { icon: carIcon }).addTo(rMap);
+      } else {
+        rCarMarker.setLatLng([data.lat, data.lng]);
+      }
+    });
+
+    function selectRiderVehicle(type, el) {
+      rType = type;
+      document.querySelectorAll('.v-card').forEach(c => c.classList.remove('selected'));
+      el.classList.add('selected');
+      calcRiderFare();
+    }
+
+    function calcRiderFare() {
+      if (!rDist) return;
+      const rates = { bike: 8, auto: 12, cab: 18 };
+      rFare = Math.round(Math.max(30, rDist * (rates[rType] || 10)));
+      document.getElementById('rider-fare-display').innerText = `₹${rFare} (${rDist} km)`;
+      const b = document.getElementById('btn-rider-book');
+      if (!b.disabled) b.innerText = `Book ${rType.toUpperCase()} (₹${rFare})`;
+    }
+
+    function requestRiderRide() {
+      socket.emit('request-ride', {
+        fare: rFare,
+        distance: rDist,
+        vehicleType: rType,
+        riderPhone: currentUser.phone
+      });
+      document.getElementById('rider-booking-box').style.display = 'none';
+      document.getElementById('rider-status-card').style.display = 'block';
+    }
+
+    socket.on('ride-created', (d) => {
+      document.getElementById('rider-otp-num').innerText = d.otp;
+      document.getElementById('rider-otp-box').style.display = 'block';
+    });
+
+    socket.on('driver-assigned', () => {
+      document.getElementById('rider-status-text').innerText = '🚗 Nandi Captain is on the way!';
+      document.getElementById('rider-status-text').style.color = '#10b981';
+    });
+
+    socket.on('trip-started', () => {
+      document.getElementById('rider-status-text').innerText = 'Trip Started! Enjoy your ride';
+    });
+
+    socket.on('ride-finished-rider', (d) => {
+      alert(`Manzil par pahunch gaye! Fare: ₹${d.fare}`);
+      location.reload();
+    });
+  </script>
+</body>
+</html>

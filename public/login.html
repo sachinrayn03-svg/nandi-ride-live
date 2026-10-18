@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Login - QuickRide</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: sans-serif; }
+    body { background: #0f172a; color: #fff; display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 20px; }
+    .auth-card { background: #1e293b; padding: 24px; border-radius: 12px; width: 100%; max-width: 360px; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
+    h2 { margin-bottom: 8px; text-align: center; }
+    p { color: #94a3b8; font-size: 0.85rem; text-align: center; margin-bottom: 20px; }
+    .tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+    .tab { flex: 1; padding: 10px; text-align: center; background: #334155; border-radius: 6px; cursor: pointer; font-weight: bold; }
+    .tab.active { background: #38bdf8; color: #000; }
+    input, select { width: 100%; padding: 12px; margin-bottom: 12px; border-radius: 6px; border: 1px solid #475569; background: #0f172a; color: #fff; font-size: 0.95rem; }
+    button { width: 100%; padding: 12px; border-radius: 6px; border: none; background: #10b981; color: #fff; font-weight: bold; font-size: 1rem; cursor: pointer; margin-top: 6px; }
+    .switch-mode { text-align: center; margin-top: 15px; font-size: 0.85rem; color: #94a3b8; }
+    .switch-mode a { color: #38bdf8; text-decoration: none; font-weight: bold; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <div class="auth-card">
+    <h2 id="form-title">Welcome to QuickRide</h2>
+    <p id="form-subtitle">Login to continue your journey</p>
+
+    <!-- Role Selection -->
+    <div class="tabs">
+      <div class="tab active" id="tab-rider" onclick="setRole('rider')">Rider</div>
+      <div class="tab" id="tab-driver" onclick="setRole('driver')">Captain (Driver)</div>
+    </div>
+
+    <!-- Auth Form -->
+    <div id="signup-fields" style="display: none;">
+      <input type="text" id="name" placeholder="Full Name" />
+    </div>
+    <input type="tel" id="phone" placeholder="Mobile Number (10 digits)" maxlength="10" />
+    <input type="password" id="password" placeholder="Password" />
+
+    <button id="btn-submit" onclick="handleSubmit()">Login</button>
+
+    <div class="switch-mode">
+      <span id="switch-text">Naye user hain?</span>
+      <a id="switch-link" onclick="toggleMode()">Account Banayein</a>
+    </div>
+  </div>
+
+  <script>
+    let currentRole = 'rider';
+    let isSignup = false;
+
+    function setRole(role) {
+      currentRole = role;
+      document.getElementById('tab-rider').classList.toggle('active', role === 'rider');
+      document.getElementById('tab-driver').classList.toggle('active', role === 'driver');
+    }
+
+    function toggleMode() {
+      isSignup = !isSignup;
+      document.getElementById('form-title').innerText = isSignup ? 'Naya Account Banayein' : 'Welcome to QuickRide';
+      document.getElementById('form-subtitle').innerText = isSignup ? 'Sign up karke shuru karein' : 'Login to continue your journey';
+      document.getElementById('signup-fields').style.display = isSignup ? 'block' : 'none';
+      document.getElementById('btn-submit').innerText = isSignup ? 'Sign Up' : 'Login';
+      document.getElementById('switch-text').innerText = isSignup ? 'Pehle se account hai?' : 'Naye user hain?';
+      document.getElementById('switch-link').innerText = isSignup ? 'Login Karein' : 'Account Banayein';
+    }
+
+    async function handleSubmit() {
+      const phone = document.getElementById('phone').value.trim();
+      const password = document.getElementById('password').value.trim();
+      const name = document.getElementById('name').value.trim();
+
+      if (!phone || !password || (isSignup && !name)) {
+        alert('Kripya saari details bharein.');
+        return;
+      }
+
+      const endpoint = isSignup ? '/api/auth/signup' : '/api/auth/login';
+      const body = { role: currentRole, phone, password, ...(isSignup && { name }) };
+
+      try {
+        const res = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        const data = await res.json();
+
+        if (!res.ok) {
+          alert(data.error || 'Kuch galat hua');
+          return;
+        }
+
+        // Save session locally
+        localStorage.setItem('user', JSON.stringify(data.user));
+
+        // Redirect based on role
+        if (currentRole === 'driver') {
+          window.location.href = '/driver.html';
+        } else {
+          window.location.href = '/rider.html';
+        }
+      } catch (err) {
+        alert('Server se connect nahi ho paya.');
+      }
+    }
+  </script>
+</body>
+</html>

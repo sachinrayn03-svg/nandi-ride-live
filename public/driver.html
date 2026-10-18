@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Captain Console</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: sans-serif; }
+    body { display: flex; flex-direction: column; height: 100vh; background: #0f172a; color: #fff; }
+    #map { height: 50vh; width: 100%; background: #222; }
+    .panel { padding: 16px; background: #1e293b; flex: 1; overflow-y: auto; }
+    .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
+    .badge { padding: 5px 12px; border-radius: 20px; font-weight: bold; background: #ef4444; }
+    .badge.online { background: #10b981; }
+    .btn { padding: 10px 18px; border-radius: 8px; border: none; font-weight: bold; cursor: pointer; color: #fff; }
+    .btn-blue { background: #3b82f6; }
+    .btn-green { background: #10b981; width: 100%; margin-top: 10px; }
+    .card { background: #334155; padding: 14px; border-radius: 10px; margin-top: 10px; display: none; }
+    .history-card { background: #0f172a; padding: 10px; border-radius: 8px; margin-top: 6px; display: flex; justify-content: space-between; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+
+  <div class="panel">
+    <div class="header">
+      <div>
+        <h3>Captain Console</h3>
+        <span class="badge" id="badge">OFFLINE</span>
+      </div>
+      <button class="btn btn-blue" id="btn-toggle" onclick="toggleOnline()">Go Online</button>
+    </div>
+
+    <div style="display: flex; gap: 10px; margin-bottom: 12px;">
+      <div style="flex:1; background:#0f172a; padding:10px; border-radius:8px; text-align:center;">
+        <small style="color:#94a3b8;">Total Earnings</small>
+        <h2 id="total-earnings" style="color:#38bdf8;">₹0</h2>
+      </div>
+    </div>
+
+    <!-- Incoming Ride -->
+    <div class="card" id="offer-card">
+      <h4 style="color:#f59e0b;">🔔 NEW RIDE OFFER!</h4>
+      <h2 id="offer-fare" style="color:#10b981; margin: 8px 0;">₹0</h2>
+      <p id="offer-dist">Distance: 0 km</p>
+      <button class="btn btn-green" onclick="acceptRide()">Accept Ride</button>
+    </div>
+
+    <!-- Active Ride -->
+    <div class="card" id="active-card">
+      <h4>Active Ride</h4>
+      <div id="otp-box">
+        <input type="text" id="otp-input" placeholder="Enter Rider OTP" style="width:100%; padding:10px; margin:10px 0; border-radius:6px; border:none; text-align:center; font-size:1.2rem;" maxlength="4" />
+        <button class="btn btn-green" onclick="verifyOtp()">Start Ride</button>
+      </div>
+      <button class="btn btn-green" id="btn-finish" style="background:#f59e0b; color:#000; display:none;" onclick="finishRide()">Complete Trip</button>
+    </div>
+
+    <h4 style="margin-top: 16px; color:#94a3b8;">Completed Trips</h4>
+    <div id="history-box"></div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    const socket = io();
+    let isOnline = false;
+    let activeRideId = null;
+
+    // Map Setup
+    const map = L.map('map').setView([28.6139, 77.2090], 13);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19
+    }).addTo(map);
+
+    let driverMarker = L.marker([28.6139, 77.2090]).addTo(map).bindPopup('Driver Location');
+    let moveTimer = null;
+    let lat = 28.6139;
+    let lng = 77.2090;
+
+    function toggleOnline() {
+      isOnline = !isOnline;
+      const badge = document.getElementById('badge');
+      const btn = document.getElementById('btn-toggle');
+
+      if (isOnline) {
+        badge.innerText = 'ONLINE';
+        badge.classList.add('online');
+        btn.innerText = 'Go Offline';
+        btn.style.background = '#ef4444';
+
+        socket.emit('driver-online', { lat, lng });
+
+        // Har 2 second me live moving car simulate karega
+        moveTimer = setInterval(() => {
+          lat += 0.0003;
+          lng += 0.0003;
+          driverMarker.setLatLng([lat, lng]);
+          map.panTo([lat, lng]);
+          socket.emit('update-driver-location', { lat, lng });
+        }, 2000);
+
+      } else {
+        badge.innerText = 'OFFLINE';
+        badge.classList.remove('online');
+        btn.innerText = 'Go Online';
+        btn.style.background = '#3b82f6';
+
+        if (moveTimer) {
+          clearInterval(moveTimer);
+          moveTimer = null;
+        }
+      }
+    }
+
+    socket.on('new-ride-offer', (data) => {
+      activeRideId = data.rideId;
+      document.getElementById('offer-fare').innerText = '₹' + data.fare;
+      document.getElementById('offer-dist').innerText = 'Distance: ' + data.distance + ' km';
+      document.getElementById('offer-card').style.display = 'block';
+    });
+
+    function acceptRide() {
+      socket.emit('accept-ride', { rideId: activeRideId });
+      document.getElementById('offer-card').style.display = 'none';
+      document.getElementById('active-card').style.display = 'block';
+    }
+
+    function verifyOtp() {
+      const enteredOtp = document.getElementById('otp-input').value;
+      socket.emit('verify-otp', { rideId: activeRideId, enteredOtp });
+    }
+
+    socket.on('otp-result', (res) => {
+      if (res.success) {
+        alert('OTP Matched! Trip Started');
+        document.getElementById('otp-box').style.display = 'none';
+        document.getElementById('btn-finish').style.display = 'block';
+      } else {
+        alert('Galat OTP!');
+      }
+    });
+
+    function finishRide() {
+      socket.emit('complete-ride', { rideId: activeRideId });
+    }
+
+    socket.on('ride-finished-driver', (data) => {
+      alert('Trip Completed! Fare: ₹' + data.fare);
+      document.getElementById('active-card').style.display = 'none';
+      document.getElementById('otp-box').style.display = 'block';
+      document.getElementById('btn-finish').style.display = 'none';
+      document.getElementById('otp-input').value = '';
+      loadHistory();
+    });
+
+    function loadHistory() {
+      fetch('/api/history')
+        .then(r => r.json())
+        .then(data => {
+          const box = document.getElementById('history-box');
+          box.innerHTML = '';
+          let total = 0;
+          data.forEach(t => {
+            total += Number(t.fare || 0);
+            box.innerHTML += `
+              <div class="history-card">
+                <div><strong>${(t.vehicle_type || 'TRIP').toUpperCase()}</strong> (${t.distance} km)</div>
+                <div style="color:#10b981; font-weight:bold;">+₹${t.fare}</div>
+              </div>`;
+          });
+          document.getElementById('total-earnings').innerText = '₹' + total;
+        })
+        .catch(() => {});
+    }
+    loadHistory();
+  </script>
+</body>
+</html>
