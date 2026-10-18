@@ -1,174 +1,211 @@
 const express = require('express');
 const http = require('http');
-const { Server } = require('socket.io');
+const socketIo = require('socket.io');
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server);
+const io = socketIo(server);
 
-app.use(express.json());
+const PORT = process.env.PORT || 10000;
+const ADMIN_SUPPORT_PHONE = "8130121347";
+const COMMISSION_RATE = 0.03; // 3% Captain platform fee
+
+app.use(express.json({ limit: '10mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // SQLite Database Setup
 const db = new sqlite3.Database('./rides.db', (err) => {
-  if (err) console.error('DB Error:', err.message);
-  else console.log('SQLite Database Connected for Nandi Ride.');
+  if (err) console.error("Database connection error:", err);
+  else console.log("SQLite Database Connected for Nandi Ride.");
 });
 
-// Create Tables
+// Database Tables Initialization
 db.serialize(() => {
+  // Captains Table (Unique vehicle & phone)
+  db.run(`CREATE TABLE IF NOT EXISTS captains (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT,
+    phone TEXT UNIQUE,
+    vehicle_type TEXT,
+    vehicle_no TEXT UNIQUE,
+    pan_no TEXT,
+    aadhar_no TEXT UNIQUE,
+    photo TEXT,
+    wallet_balance REAL DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+
+  // Riders Table (Unique phone & aadhar)
+  db.run(`CREATE TABLE IF NOT EXISTS riders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT,
+    phone TEXT UNIQUE,
+    aadhar_no TEXT UNIQUE,
+    wallet_balance REAL DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+
+  // Rides Table
   db.run(`CREATE TABLE IF NOT EXISTS rides (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     rider_phone TEXT,
-    driver_phone TEXT,
+    rider_name TEXT,
+    captain_id INTEGER,
+    captain_name TEXT,
+    captain_phone TEXT,
+    vehicle_no TEXT,
+    pickup TEXT,
+    dropoff TEXT,
     fare REAL,
-    distance REAL,
-    vehicle_type TEXT,
-    completed_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  )`);
-
-  db.run(`CREATE TABLE IF NOT EXISTS accounts (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    role TEXT,
-    name TEXT,
-    phone TEXT UNIQUE,
-    password TEXT,
+    commission REAL DEFAULT 0,
+    otp TEXT,
+    status TEXT DEFAULT 'pending', -- pending, accepted, ongoing, completed, cancelled
+    payment_mode TEXT DEFAULT 'CASH',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`);
+
+  // Admin Wallet Table (For 3% platform commission earnings)
+  db.run(`CREATE TABLE IF NOT EXISTS admin_wallet (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    balance REAL DEFAULT 0
+  )`);
+
+  db.run(`INSERT INTO admin_wallet (id, balance) SELECT 1, 0 WHERE NOT EXISTS (SELECT 1 FROM admin_wallet WHERE id = 1)`);
 });
 
-// Authentication APIs
-app.post('/api/auth/signup', (req, res) => {
-  const { role, name, phone, password } = req.body;
-  if (!role || !name || !phone || !password) {
-    return res.status(400).json({ error: 'Kripya saari details bharein.' });
-  }
-
-  const query = `INSERT INTO accounts (role, name, phone, password) VALUES (?, ?, ?, ?)`;
-  db.run(query, [role, name, phone, password], function (err) {
+// APIs
+// Captain Registration
+app.post('/api/captain/register', (req, res) => {
+  const { name, phone, vehicle_type, vehicle_no, pan_no, aadhar_no, photo } = req.body;
+  const sql = `INSERT INTO captains (name, phone, vehicle_type, vehicle_no, pan_no, aadhar_no, photo, wallet_balance) VALUES (?, ?, ?, ?, ?, ?, ?, 0)`;
+  db.run(sql, [name, phone, vehicle_type, vehicle_no.toUpperCase().trim(), pan_no.toUpperCase().trim(), aadhar_no.trim(), photo], function(err) {
     if (err) {
-      if (err.message.includes('UNIQUE')) {
-        return res.status(400).json({ error: 'Yeh phone number pehle se registered hai.' });
+      if (err.message.includes('UNIQUE constraint failed')) {
+        return res.status(400).json({ success: false, message: "Vehicle No, Phone ya Aadhar pehle se registered hai!" });
       }
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ success: false, message: err.message });
     }
-    res.json({ success: true, message: 'Account ban gaya!', user: { id: this.lastID, role, name, phone } });
+    res.json({ success: true, captainId: this.lastID });
   });
 });
 
-app.post('/api/auth/login', (req, res) => {
-  const { role, phone, password } = req.body;
-  db.get(
-    `SELECT id, role, name, phone FROM accounts WHERE role = ? AND phone = ? AND password = ?`,
-    [role, phone, password],
-    (err, row) => {
-      if (err) return res.status(500).json({ error: err.message });
-      if (!row) return res.status(401).json({ error: 'Galat phone number ya password.' });
-      res.json({ success: true, user: row });
+// Rider Registration
+app.post('/api/rider/register', (req, res) => {
+  const { name, phone, aadhar_no } = req.body;
+  const sql = `INSERT INTO riders (name, phone, aadhar_no, wallet_balance) VALUES (?, ?, ?, 0)`;
+  db.run(sql, [name, phone, aadhar_no.trim()], function(err) {
+    if (err) {
+      if (err.message.includes('UNIQUE constraint failed')) {
+        return res.status(400).json({ success: false, message: "Aadhar No ya Phone Number pehle se registered hai!" });
+      }
+      return res.status(500).json({ success: false, message: err.message });
     }
-  );
-});
-
-// Trip History API
-app.get('/api/history', (req, res) => {
-  db.all('SELECT * FROM rides ORDER BY id DESC LIMIT 10', [], (err, rows) => {
-    if (err) res.status(500).json({ error: err.message });
-    else res.json(rows);
+    res.json({ success: true, riderId: this.lastID });
   });
 });
 
-// Socket.io Real-time Ride Engine
-let rides = {};
+// Fetch Captain Details
+app.get('/api/captain/:phone', (req, res) => {
+  db.get(`SELECT * FROM captains WHERE phone = ?`, [req.params.phone], (err, row) => {
+    if (err || !row) return res.status(404).json({ success: false, message: "Captain nahi mila" });
+    res.json({ success: true, data: row });
+  });
+});
 
+// Fetch Rider Details
+app.get('/api/rider/:phone', (req, res) => {
+  db.get(`SELECT * FROM riders WHERE phone = ?`, [req.params.phone], (err, row) => {
+    if (err || !row) return res.status(404).json({ success: false, message: "Rider nahi mila" });
+    res.json({ success: true, data: row });
+  });
+});
+
+// Admin Wallet Details
+app.get('/api/admin/wallet', (req, res) => {
+  db.get(`SELECT balance FROM admin_wallet WHERE id = 1`, (err, row) => {
+    res.json({ balance: row ? row.balance : 0, support_phone: ADMIN_SUPPORT_PHONE });
+  });
+});
+
+// Socket.io Real-Time Workflows
 io.on('connection', (socket) => {
-  // Driver Status & Live Location
-  socket.on('driver-online', (data) => {
-    socket.broadcast.emit('driver-available', { driverId: socket.id, ...data });
+
+  // Location Sync
+  socket.on('update_location', (data) => {
+    socket.broadcast.emit(`location_${data.rideId}`, data);
   });
 
-  socket.on('update-driver-location', (data) => {
-    io.emit('driver-location-updated', {
-      driverId: socket.id,
-      lat: data.lat,
-      lng: data.lng
-    });
-  });
-
-  // Rider Booking Request
-  socket.on('request-ride', (data) => {
-    const rideId = 'NANDI_' + Date.now();
+  // Ride Request
+  socket.on('request_ride', (data) => {
     const otp = Math.floor(1000 + Math.random() * 9000).toString();
+    const commission = data.fare * COMMISSION_RATE;
 
-    rides[rideId] = {
-      rideId,
-      riderSocketId: socket.id,
-      riderPhone: data.riderPhone || 'Guest',
-      driverSocketId: null,
-      fare: data.fare,
-      distance: data.distance,
-      vehicleType: data.vehicleType,
-      otp,
-      status: 'SEARCHING'
-    };
-
-    socket.emit('ride-created', { rideId, otp });
-    io.emit('new-ride-offer', {
-      rideId,
-      fare: data.fare,
-      distance: data.distance,
-      vehicleType: data.vehicleType
+    const sql = `INSERT INTO rides (rider_phone, rider_name, pickup, dropoff, fare, commission, otp, status, payment_mode) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)`;
+    db.run(sql, [data.riderPhone, data.riderName, data.pickup, data.dropoff, data.fare, commission, otp, data.paymentMode], function(err) {
+      if (!err) {
+        const rideData = { ...data, rideId: this.lastID, otp, commission };
+        io.emit('new_ride_available', rideData);
+        socket.emit('ride_created', { rideId: this.lastID, otp });
+      }
     });
   });
 
-  // Driver Accept Ride
-  socket.on('accept-ride', (data) => {
-    const ride = rides[data.rideId];
-    if (ride && ride.status === 'SEARCHING') {
-      ride.driverSocketId = socket.id;
-      ride.status = 'ACCEPTED';
-
-      io.to(ride.riderSocketId).emit('driver-assigned', {
-        driverId: socket.id,
-        rideId: ride.rideId
-      });
-    }
+  // Accept Ride by Captain
+  socket.on('accept_ride', (data) => {
+    const sql = `UPDATE rides SET captain_id = ?, captain_name = ?, captain_phone = ?, vehicle_no = ?, status = 'accepted' WHERE id = ? AND status = 'pending'`;
+    db.run(sql, [data.captainId, data.captainName, data.captainPhone, data.vehicleNo, data.rideId], function(err) {
+      if (!err && this.changes > 0) {
+        io.emit(`ride_matched_${data.rideId}`, data);
+      }
+    });
   });
 
-  // OTP Verification
-  socket.on('verify-otp', (data) => {
-    const ride = rides[data.rideId];
-    if (ride && ride.otp === data.enteredOtp) {
-      ride.status = 'IN_PROGRESS';
-      socket.emit('otp-result', { success: true });
-      io.to(ride.riderSocketId).emit('trip-started');
-    } else {
-      socket.emit('otp-result', { success: false });
-    }
+  // Verify OTP & Start Ride
+  socket.on('verify_otp_start', (data) => {
+    db.get(`SELECT * FROM rides WHERE id = ?`, [data.rideId], (err, ride) => {
+      if (ride && ride.otp === data.otp) {
+        db.run(`UPDATE rides SET status = 'ongoing' WHERE id = ?`, [data.rideId]);
+        io.emit(`ride_started_${data.rideId}`, { success: true });
+      } else {
+        socket.emit('otp_error', { message: "Galat OTP! Kripya sahi OTP daalein." });
+      }
+    });
   });
 
-  // Ride Finish & DB Save
-  socket.on('complete-ride', (data) => {
-    const ride = rides[data.rideId];
-    if (ride) {
-      ride.status = 'COMPLETED';
-      db.run(
-        `INSERT INTO rides (rider_phone, driver_phone, fare, distance, vehicle_type) VALUES (?, ?, ?, ?, ?)`,
-        [ride.riderPhone, ride.driverPhone || 'Captain', ride.fare, ride.distance, ride.vehicleType],
-        (err) => {
-          if (err) console.error('Save Trip Error:', err.message);
-        }
-      );
+  // Cancel Ride (Allowed only before OTP is verified)
+  socket.on('cancel_ride', (data) => {
+    db.get(`SELECT status FROM rides WHERE id = ?`, [data.rideId], (err, ride) => {
+      if (ride && ride.status !== 'ongoing' && ride.status !== 'completed') {
+        db.run(`UPDATE rides SET status = 'cancelled' WHERE id = ?`, [data.rideId]);
+        io.emit(`ride_cancelled_${data.rideId}`, { cancelledBy: data.cancelledBy });
+      }
+    });
+  });
 
-      socket.emit('ride-finished-driver', { fare: ride.fare });
-      io.to(ride.riderSocketId).emit('ride-finished-rider', { fare: ride.fare });
-      delete rides[data.rideId];
-    }
+  // In-App Ephemeral Chat during Ride
+  socket.on('send_chat_msg', (data) => {
+    io.emit(`chat_msg_${data.rideId}`, { sender: data.sender, text: data.text });
+  });
+
+  // Complete Ride & Deduct 3% Commission
+  socket.on('complete_ride', (data) => {
+    db.get(`SELECT * FROM rides WHERE id = ?`, [data.rideId], (err, ride) => {
+      if (ride && ride.status === 'ongoing') {
+        const comm = ride.commission;
+        db.run(`UPDATE rides SET status = 'completed' WHERE id = ?`, [data.rideId]);
+        // Update Admin Wallet with 3%
+        db.run(`UPDATE admin_wallet SET balance = balance + ? WHERE id = 1`, [comm]);
+        // Deduct fee from Captain balance
+        db.run(`UPDATE captains SET wallet_balance = wallet_balance - ? WHERE id = ?`, [comm, ride.captain_id]);
+        
+        io.emit(`ride_completed_${data.rideId}`, { fare: ride.fare, commission: comm });
+      }
+    });
   });
 });
 
-const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`Nandi Ride Server Live on port ${PORT}`);
 });
